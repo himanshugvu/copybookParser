@@ -1,6 +1,5 @@
 package org.example.parser;
 
-
 import org.example.parser.util.JsonUtils;
 
 import java.io.IOException;
@@ -74,8 +73,6 @@ public class CopybookParser {
         ParseResult result = new ParseResult();
         result.setFileName(copybookPath.getFileName().toString());
 
-        // Track redefines relationships
-        Map<String, List<CobolField>> redefinesGroups = new HashMap<>();
         Stack<CobolField> fieldStack = new Stack<>();
         int basePosition = 1;
         int currentPosition = basePosition;
@@ -86,16 +83,13 @@ public class CopybookParser {
 
             // Handle REDEFINES at 01 level (different record layouts)
             if (field.getLevel() == 1 && field.getRedefines() != null) {
-                // This is a new record layout that redefines another
                 currentRedefinesBase = field.getRedefines();
-                currentPosition = basePosition; // Reset position to start
+                currentPosition = basePosition;
 
-                // Create a separate record layout
                 RecordLayout layout = new RecordLayout(field.getName());
                 layout.setRedefines(field.getRedefines());
                 layout.setStartPosition(basePosition);
 
-                // Process this layout separately
                 processRecordLayout(tokens, tokens.indexOf(token), layout, result);
                 continue;
             }
@@ -106,9 +100,7 @@ public class CopybookParser {
                 if (!fieldStack.isEmpty()) {
                     fieldStack.peek().addChild(completedField);
                 } else {
-                    // This is a top-level field
                     if (field.getLevel() == 1) {
-                        // Create main record layout
                         RecordLayout mainLayout = new RecordLayout(completedField.getName());
                         mainLayout.setStartPosition(basePosition);
                         mainLayout.getFields().add(completedField);
@@ -118,23 +110,18 @@ public class CopybookParser {
                 }
             }
 
-            // Set position for elementary fields (fields with PIC clause)
+            // Set position for fields
             if (field.getPicture() != null) {
+                // Elementary field with picture clause
                 field.setStartPosition(currentPosition);
 
-                int fieldLength = field.getLength();
-                if (field.getOccursCount() > 0) {
-                    fieldLength *= field.getOccursCount();
-                }
-
+                int fieldLength = calculateActualFieldLength(field);
                 field.setLength(fieldLength);
                 field.setEndPosition(currentPosition + fieldLength - 1);
+                currentPosition += fieldLength;
 
-                // Only advance position if not in a redefines group
-                if (currentRedefinesBase == null) {
-                    currentPosition += fieldLength;
-                }
             } else {
+                // Group field - set start position, end position will be calculated later
                 field.setStartPosition(currentPosition);
             }
 
@@ -151,14 +138,114 @@ public class CopybookParser {
             }
         }
 
-        // Update group field positions and record layout lengths
+        // Update group field positions and handle OCCURS
         updateGroupFieldPositions(result.getFields());
         updateRecordLayoutLengths(result.getRecordLayouts());
 
-        // Set total length to the maximum record length
         result.setTotalLength(calculateMaxRecordLength(result.getRecordLayouts()));
 
         return result;
+    }
+
+    private int calculateActualFieldLength(CobolField field) {
+        int baseLength = field.getLength(); // Length from picture clause
+
+        // Adjust for usage clause
+        if ("COMP-3".equals(field.getUsage()) || "PACKED-DECIMAL".equals(field.getUsage())) {
+            // COMP-3: (digits + 1) / 2 rounded up
+            String pic = field.getPicture();
+            int totalDigits = extractTotalDigits(pic);
+            baseLength = (totalDigits + 1) / 2;
+        } else if ("COMP".equals(field.getUsage()) || "BINARY".equals(field.getUsage())) {
+            // COMP/BINARY: depends on number of digits
+            String pic = field.getPicture();
+            int totalDigits = extractTotalDigits(pic);
+            if (totalDigits <= 4) {
+                baseLength = 2; // Halfword
+            } else if (totalDigits <= 9) {
+                baseLength = 4; // Fullword
+            } else {
+                baseLength = 8; // Doubleword
+            }
+        }
+
+        return baseLength;
+    }
+
+    private int extractTotalDigits(String picture) {
+        if (picture == null) return 0;
+
+        int totalDigits = 0;
+        String pic = picture.toUpperCase().replaceAll("\\s+", "");
+
+        // Handle S (sign)
+        pic = pic.replace("S", "");
+
+        // Handle V (decimal point)
+        pic = pic.replace("V", "");
+
+        // Count 9s with parentheses
+        while (pic.contains("9(")) {
+            int start = pic.indexOf("9(");
+            int end = pic.indexOf(")", start);
+            if (end != -1) {
+                try {
+                    int count = Integer.parseInt(pic.substring(start + 2, end));
+                    totalDigits += count;
+                    pic = pic.substring(0, start) + pic.substring(end + 1);
+                } catch (NumberFormatException e) {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        // Count remaining 9s
+        for (char c : pic.toCharArray()) {
+            if (c == '9') totalDigits++;
+        }
+
+        return totalDigits;
+    }
+
+    private void updateGroupFieldPositions(List<CobolField> fields) {
+        for (CobolField field : fields) {
+            if (!field.getChildren().isEmpty()) {
+                // Process children first
+                updateGroupFieldPositions(field.getChildren());
+
+                // Calculate group field positions and handle OCCURS
+                int minStart = Integer.MAX_VALUE;
+                int maxEnd = 0;
+                int childrenTotalLength = 0;
+
+                for (CobolField child : field.getChildren()) {
+                    if (child.getStartPosition() > 0) {
+                        minStart = Math.min(minStart, child.getStartPosition());
+                        maxEnd = Math.max(maxEnd, child.getEndPosition());
+                        childrenTotalLength += child.getLength();
+                    }
+                }
+
+                if (minStart != Integer.MAX_VALUE) {
+                    field.setStartPosition(minStart);
+
+                    // Handle OCCURS clause
+                    if (field.getOccursCount() > 0) {
+                        // This field occurs multiple times
+                        int singleOccurrenceLength = maxEnd - minStart + 1;
+                        int totalLength = singleOccurrenceLength * field.getOccursCount();
+
+                        field.setLength(totalLength);
+                        field.setEndPosition(minStart + totalLength - 1);
+                    } else {
+                        field.setEndPosition(maxEnd);
+                        field.setLength(maxEnd - minStart + 1);
+                    }
+                }
+            }
+        }
     }
 
     private void processRecordLayout(List<CopybookTokenizer.Token> allTokens, int startIndex,
@@ -171,9 +258,8 @@ public class CopybookParser {
             CopybookTokenizer.Token token = allTokens.get(i);
             CobolField field = createFieldFromToken(token);
 
-            // Check if we've moved to a different 01 level record
             if (field.getLevel() == 1 && i > startIndex) {
-                break; // End of current record layout
+                break;
             }
 
             if (field.getLevel() == 1) {
@@ -184,7 +270,6 @@ public class CopybookParser {
 
             if (!inCurrentLayout) continue;
 
-            // Pop fields from stack until we find the parent level
             while (!fieldStack.isEmpty() && fieldStack.peek().getLevel() >= field.getLevel()) {
                 CobolField completedField = fieldStack.pop();
                 if (!fieldStack.isEmpty()) {
@@ -192,15 +277,10 @@ public class CopybookParser {
                 }
             }
 
-            // Set position for elementary fields
             if (field.getPicture() != null) {
                 field.setStartPosition(currentPosition);
 
-                int fieldLength = field.getLength();
-                if (field.getOccursCount() > 0) {
-                    fieldLength *= field.getOccursCount();
-                }
-
+                int fieldLength = calculateActualFieldLength(field);
                 field.setLength(fieldLength);
                 field.setEndPosition(currentPosition + fieldLength - 1);
                 currentPosition += fieldLength;
@@ -211,7 +291,6 @@ public class CopybookParser {
             fieldStack.push(field);
         }
 
-        // Process remaining fields in stack
         while (!fieldStack.isEmpty()) {
             CobolField completedField = fieldStack.pop();
             if (!fieldStack.isEmpty()) {
@@ -251,31 +330,6 @@ public class CopybookParser {
         }
 
         return field;
-    }
-
-    private void updateGroupFieldPositions(List<CobolField> fields) {
-        for (CobolField field : fields) {
-            if (!field.getChildren().isEmpty()) {
-                updateGroupFieldPositions(field.getChildren());
-
-                // Update group field position and length based on children
-                int minStart = Integer.MAX_VALUE;
-                int maxEnd = 0;
-
-                for (CobolField child : field.getChildren()) {
-                    if (child.getStartPosition() > 0) {
-                        minStart = Math.min(minStart, child.getStartPosition());
-                        maxEnd = Math.max(maxEnd, child.getEndPosition());
-                    }
-                }
-
-                if (minStart != Integer.MAX_VALUE) {
-                    field.setStartPosition(minStart);
-                    field.setEndPosition(maxEnd);
-                    field.setLength(maxEnd - minStart + 1);
-                }
-            }
-        }
     }
 
     private void updateRecordLayoutLengths(List<RecordLayout> layouts) {

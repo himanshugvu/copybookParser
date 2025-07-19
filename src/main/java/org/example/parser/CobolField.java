@@ -1,7 +1,7 @@
 package org.example.parser;
 
-
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -13,6 +13,7 @@ public class CobolField {
     private String name;
 
     @JsonProperty("picture")
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     private String picture;
 
     @JsonProperty("startPosition")
@@ -25,6 +26,7 @@ public class CobolField {
     private int length;
 
     @JsonProperty("dataType")
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     private String dataType;
 
     @JsonProperty("usage")
@@ -46,16 +48,23 @@ public class CobolField {
     private int occursCount;
 
     @JsonProperty("redefines")
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     private String redefines;
 
     @JsonProperty("value")
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     private String value;
 
     @JsonProperty("children")
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
     private List<CobolField> children;
+
+    // New field to track condition names (but they won't be in JSON)
+    private List<ConditionName> conditionNames;
 
     public CobolField() {
         this.children = new ArrayList<>();
+        this.conditionNames = new ArrayList<>();
     }
 
     public CobolField(int level, String name) {
@@ -64,7 +73,21 @@ public class CobolField {
         this.name = name;
     }
 
-    // Getters and Setters
+    // Inner class for condition names (for internal tracking only)
+    public static class ConditionName {
+        private String name;
+        private String value;
+
+        public ConditionName(String name, String value) {
+            this.name = name;
+            this.value = value;
+        }
+
+        public String getName() { return name; }
+        public String getValue() { return value; }
+    }
+
+    // All existing getters and setters remain the same...
     public int getLevel() { return level; }
     public void setLevel(int level) { this.level = level; }
 
@@ -86,7 +109,9 @@ public class CobolField {
     public int getLength() { return length; }
     public void setLength(int length) {
         this.length = length;
-        this.endPosition = this.startPosition + length - 1;
+        if (this.startPosition > 0) {
+            this.endPosition = this.startPosition + length - 1;
+        }
     }
 
     public String getDataType() { return dataType; }
@@ -121,6 +146,13 @@ public class CobolField {
 
     public void addChild(CobolField child) {
         this.children.add(child);
+    }
+
+    // Methods for condition names (internal use only)
+    public List<ConditionName> getConditionNames() { return conditionNames; }
+
+    public void addConditionName(String name, String value) {
+        this.conditionNames.add(new ConditionName(name, value));
     }
 
     private void analyzePicture() {
@@ -207,4 +239,3 @@ public class CobolField {
         return totalLength > 0 ? totalLength : 1;
     }
 }
-
