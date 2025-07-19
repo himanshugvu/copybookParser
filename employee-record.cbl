@@ -11,3 +11,4 @@
            03 EMP-BENEFITS         OCCURS 5 TIMES.
                05 BENEFIT-CODE     PIC XX.
                05 BENEFIT-AMOUNT   PIC 9(5)V99 COMP-3.
+           03 EMP-TEST             PIC X(10).
