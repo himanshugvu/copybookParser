@@ -10,7 +10,7 @@ import java.util.Stack;
 
 public class CopybookParser {
 
-    // ... (Keep existing ParseResult and RecordLayout classes unchanged)
+    // ... (Keep existing ParseResult and RecordLayout classes)
 
     public static class ParseResult {
         private List<CobolField> fields;
@@ -23,15 +23,13 @@ public class CopybookParser {
             this.recordLayouts = new ArrayList<>();
         }
 
+        // Getters and setters...
         public List<CobolField> getFields() { return fields; }
         public void setFields(List<CobolField> fields) { this.fields = fields; }
-
         public List<RecordLayout> getRecordLayouts() { return recordLayouts; }
         public void setRecordLayouts(List<RecordLayout> recordLayouts) { this.recordLayouts = recordLayouts; }
-
         public String getFileName() { return fileName; }
         public void setFileName(String fileName) { this.fileName = fileName; }
-
         public int getTotalLength() { return totalLength; }
         public void setTotalLength(int totalLength) { this.totalLength = totalLength; }
     }
@@ -48,18 +46,15 @@ public class CopybookParser {
             this.fields = new ArrayList<>();
         }
 
+        // Getters and setters...
         public String getName() { return name; }
         public void setName(String name) { this.name = name; }
-
         public String getRedefines() { return redefines; }
         public void setRedefines(String redefines) { this.redefines = redefines; }
-
         public List<CobolField> getFields() { return fields; }
         public void setFields(List<CobolField> fields) { this.fields = fields; }
-
         public int getStartPosition() { return startPosition; }
         public void setStartPosition(int startPosition) { this.startPosition = startPosition; }
-
         public int getLength() { return length; }
         public void setLength(int length) { this.length = length; }
     }
@@ -84,6 +79,15 @@ public class CopybookParser {
         int basePosition = 1;
 
         for (CopybookTokenizer.Token token : tokens) {
+            // Handle 88-level condition names
+            if (token.isConditionName) {
+                if (!fieldStack.isEmpty()) {
+                    CobolField parentField = fieldStack.peek();
+                    parentField.addConditionName(token.name, token.value);
+                }
+                continue; // Skip processing 88-level as regular fields
+            }
+
             CobolField field = createFieldFromToken(token);
 
             if (field.getLevel() == 1 && field.getRedefines() != null) {
@@ -135,9 +139,7 @@ public class CopybookParser {
             }
         }
 
-        // Create simplified array elements and clean up redundant children
         createArrayElementsAndCleanup(result.getFields());
-
         finalizeGroupFields(result.getFields());
         updateRecordLayoutLengths(result.getRecordLayouts());
         result.setTotalLength(positionTracker.getCurrentPosition() - 1);
@@ -145,28 +147,23 @@ public class CopybookParser {
         return result;
     }
 
+    // ... (Keep all other existing methods: createArrayElementsAndCleanup, processCompletedField, etc.)
+
     private void createArrayElementsAndCleanup(List<CobolField> fields) {
         for (CobolField field : fields) {
             if (field.getOccursCount() > 0) {
-                // Calculate single occurrence length
                 int singleOccurrenceLength = calculateGroupFieldLength(field);
                 int currentPos = field.getStartPosition();
 
-                // Create array elements for each occurrence
                 for (int i = 1; i <= field.getOccursCount(); i++) {
                     CobolField.ArrayElement arrayElement = new CobolField.ArrayElement(i, currentPos, singleOccurrenceLength);
-
-                    // Add field positions for this occurrence
                     addFieldPositionsToArrayElement(field.getChildren(), arrayElement, currentPos);
-
                     field.getArrayElements().add(arrayElement);
                     currentPos += singleOccurrenceLength;
                 }
 
-                // Clear children since we now have arrayElements
                 field.getChildren().clear();
             } else {
-                // Recursively process children for non-OCCURS fields
                 createArrayElementsAndCleanup(field.getChildren());
             }
         }
@@ -177,7 +174,6 @@ public class CopybookParser {
 
         for (CobolField child : children) {
             if (child.getPicture() != null) {
-                // Elementary field
                 int fieldLength = calculateActualFieldLength(child);
                 CobolField.FieldPosition fieldPosition = new CobolField.FieldPosition(
                         child.getName(),
@@ -190,7 +186,6 @@ public class CopybookParser {
                 arrayElement.getFields().add(fieldPosition);
                 currentPos += fieldLength;
             } else {
-                // Group field - recursively add its children
                 addFieldPositionsToArrayElement(child.getChildren(), arrayElement, currentPos);
                 currentPos += calculateGroupFieldLength(child);
             }
@@ -280,7 +275,6 @@ public class CopybookParser {
 
     private void finalizeGroupFields(List<CobolField> fields) {
         for (CobolField field : fields) {
-            // Only process children if they exist (non-OCCURS fields)
             if (!field.getChildren().isEmpty()) {
                 finalizeGroupFields(field.getChildren());
 
@@ -299,6 +293,11 @@ public class CopybookParser {
                         field.setStartPosition(minStart);
                         field.setEndPosition(maxEnd);
                         field.setLength(maxEnd - minStart + 1);
+
+                        // Set dataType for group fields
+                        if (field.getDataType() == null) {
+                            field.setDataType("GROUP");
+                        }
                     }
                 }
             }
@@ -314,6 +313,16 @@ public class CopybookParser {
 
         for (int i = startIndex; i < allTokens.size(); i++) {
             CopybookTokenizer.Token token = allTokens.get(i);
+
+            // Handle 88-level condition names
+            if (token.isConditionName) {
+                if (!fieldStack.isEmpty()) {
+                    CobolField parentField = fieldStack.peek();
+                    parentField.addConditionName(token.name, token.value);
+                }
+                continue;
+            }
+
             CobolField field = createFieldFromToken(token);
 
             if (field.getLevel() == 1 && i > startIndex) break;

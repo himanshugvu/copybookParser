@@ -27,16 +27,13 @@ public class CobolField {
 
     @JsonProperty("dataType")
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    private String dataType;
+    private String dataType; // Now: "STRING", "NUMBER", or "GROUP"
 
     @JsonProperty("usage")
     private String usage;
 
     @JsonProperty("signed")
     private boolean signed;
-
-    @JsonProperty("numeric")
-    private boolean numeric;
 
     @JsonProperty("decimal")
     private boolean decimal;
@@ -59,16 +56,17 @@ public class CobolField {
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
     private List<CobolField> children;
 
-    // New simplified array structure - only for OCCURS fields
     @JsonProperty("arrayElements")
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
     private List<ArrayElement> arrayElements;
 
+    @JsonProperty("conditionNames")
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private List<ConditionName> conditionNames;
+
     @JsonProperty("arrayIndex")
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private Integer arrayIndex;
-
-    private List<ConditionName> conditionNames;
 
     public CobolField() {
         this.children = new ArrayList<>();
@@ -82,7 +80,7 @@ public class CobolField {
         this.name = name;
     }
 
-    // Simplified array element structure
+    // ArrayElement and FieldPosition classes remain the same...
     public static class ArrayElement {
         @JsonProperty("index")
         private int index;
@@ -107,24 +105,19 @@ public class CobolField {
             this.fields = new ArrayList<>();
         }
 
-        // Getters and setters
+        // Getters and setters...
         public int getIndex() { return index; }
         public void setIndex(int index) { this.index = index; }
-
         public int getStartPosition() { return startPosition; }
         public void setStartPosition(int startPosition) { this.startPosition = startPosition; }
-
         public int getEndPosition() { return endPosition; }
         public void setEndPosition(int endPosition) { this.endPosition = endPosition; }
-
         public int getLength() { return length; }
         public void setLength(int length) { this.length = length; }
-
         public List<FieldPosition> getFields() { return fields; }
         public void setFields(List<FieldPosition> fields) { this.fields = fields; }
     }
 
-    // Individual field positions within array element
     public static class FieldPosition {
         @JsonProperty("name")
         private String name;
@@ -159,31 +152,28 @@ public class CobolField {
             this.usage = usage;
         }
 
-        // Getters and setters
+        // Getters and setters...
         public String getName() { return name; }
         public void setName(String name) { this.name = name; }
-
         public int getStartPosition() { return startPosition; }
         public void setStartPosition(int startPosition) { this.startPosition = startPosition; }
-
         public int getEndPosition() { return endPosition; }
         public void setEndPosition(int endPosition) { this.endPosition = endPosition; }
-
         public int getLength() { return length; }
         public void setLength(int length) { this.length = length; }
-
         public String getPicture() { return picture; }
         public void setPicture(String picture) { this.picture = picture; }
-
         public String getDataType() { return dataType; }
         public void setDataType(String dataType) { this.dataType = dataType; }
-
         public String getUsage() { return usage; }
         public void setUsage(String usage) { this.usage = usage; }
     }
 
     public static class ConditionName {
+        @JsonProperty("name")
         private String name;
+
+        @JsonProperty("value")
         private String value;
 
         public ConditionName(String name, String value) {
@@ -195,7 +185,7 @@ public class CobolField {
         public String getValue() { return value; }
     }
 
-    // All getters and setters
+    // All getters and setters...
     public int getLevel() { return level; }
     public void setLevel(int level) { this.level = level; }
 
@@ -231,9 +221,6 @@ public class CobolField {
     public boolean isSigned() { return signed; }
     public void setSigned(boolean signed) { this.signed = signed; }
 
-    public boolean isNumeric() { return numeric; }
-    public void setNumeric(boolean numeric) { this.numeric = numeric; }
-
     public boolean isDecimal() { return decimal; }
     public void setDecimal(boolean decimal) { this.decimal = decimal; }
 
@@ -259,24 +246,31 @@ public class CobolField {
     public List<ArrayElement> getArrayElements() { return arrayElements; }
     public void setArrayElements(List<ArrayElement> arrayElements) { this.arrayElements = arrayElements; }
 
-    public Integer getArrayIndex() { return arrayIndex; }
-    public void setArrayIndex(Integer arrayIndex) { this.arrayIndex = arrayIndex; }
-
     public List<ConditionName> getConditionNames() { return conditionNames; }
+    public void setConditionNames(List<ConditionName> conditionNames) { this.conditionNames = conditionNames; }
 
     public void addConditionName(String name, String value) {
         this.conditionNames.add(new ConditionName(name, value));
     }
 
+    public Integer getArrayIndex() { return arrayIndex; }
+    public void setArrayIndex(Integer arrayIndex) { this.arrayIndex = arrayIndex; }
+
     private void analyzePicture() {
-        if (picture == null) return;
+        if (picture == null) {
+            this.dataType = "GROUP"; // No picture = group field
+            return;
+        }
 
         String pic = picture.toUpperCase().trim();
 
-        this.numeric = pic.contains("9") || pic.contains("S9");
+        // Check if signed
         this.signed = pic.startsWith("S") || pic.contains("S");
+
+        // Check if decimal
         this.decimal = pic.contains("V");
 
+        // Calculate decimal places
         if (decimal) {
             String[] parts = pic.split("V");
             if (parts.length > 1) {
@@ -285,16 +279,16 @@ public class CobolField {
             }
         }
 
+        // Simplified data type determination
         if (pic.contains("9")) {
-            this.dataType = signed ? "SIGNED_NUMERIC" : "NUMERIC";
-        } else if (pic.contains("X")) {
-            this.dataType = "ALPHANUMERIC";
-        } else if (pic.contains("A")) {
-            this.dataType = "ALPHABETIC";
+            this.dataType = "NUMBER";
+        } else if (pic.contains("X") || pic.contains("A")) {
+            this.dataType = "STRING";
         } else {
-            this.dataType = "ALPHANUMERIC";
+            this.dataType = "STRING"; // Default to string for unknown formats
         }
 
+        // Calculate length
         this.length = calculatePictureLength(pic);
     }
 

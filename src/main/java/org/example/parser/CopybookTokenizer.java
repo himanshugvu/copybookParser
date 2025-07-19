@@ -7,12 +7,11 @@ import java.util.regex.Pattern;
 
 public class CopybookTokenizer {
     private static final Pattern LEVEL_NAME_PATTERN = Pattern.compile(
-        "^\\s*(\\d{2})\\s+([A-Za-z0-9_-]+).*$"
+            "^\\s*(\\d{2})\\s+([A-Za-z0-9_-]+).*$"
     );
 
-    // Enhanced to handle VALUE clauses with quotes
     private static final Pattern VALUE_PATTERN = Pattern.compile(
-        "VALUE\\s+['\"]?([^'\"\\s\\.]+)['\"]?", Pattern.CASE_INSENSITIVE
+            "VALUE\\s+['\"]?([^'\"\\s\\.]+)['\"]?", Pattern.CASE_INSENSITIVE
     );
 
     public static class Token {
@@ -24,7 +23,7 @@ public class CopybookTokenizer {
         public String redefines;
         public String value;
         public String originalLine;
-        public boolean isConditionName; // New field to identify 88-level items
+        public boolean isConditionName;
 
         public Token(String line) {
             this.originalLine = line.trim();
@@ -32,29 +31,24 @@ public class CopybookTokenizer {
         }
 
         private void parseLine(String line) {
-            // Clean the line
             line = line.trim();
             if (line.endsWith(".")) {
                 line = line.substring(0, line.length() - 1);
             }
 
-            // Extract level and name first
             Matcher levelNameMatcher = LEVEL_NAME_PATTERN.matcher(line);
             if (levelNameMatcher.matches()) {
                 try {
                     this.level = Integer.parseInt(levelNameMatcher.group(1));
                     this.name = levelNameMatcher.group(2);
-
-                    // Mark 88-level items as condition names
                     this.isConditionName = (this.level == 88);
-
                 } catch (NumberFormatException e) {
                     this.level = 1;
                     this.name = "UNKNOWN";
                 }
             }
 
-            // Parse remaining parts only if not a condition name
+            // Parse all fields including 88-level items
             if (!isConditionName) {
                 parsePicture(line);
                 parseUsage(line);
@@ -62,7 +56,7 @@ public class CopybookTokenizer {
                 parseRedefines(line);
             }
 
-            // Always parse VALUE for condition names and regular fields
+            // Always parse VALUE (especially important for 88-level)
             parseValue(line);
         }
 
@@ -111,14 +105,11 @@ public class CopybookTokenizer {
         StringBuilder continuationLine = new StringBuilder();
 
         for (String line : lines) {
-            // Skip empty lines and comments
             String trimmed = line.trim();
-            if (trimmed.isEmpty() || trimmed.startsWith("*") ||
-                trimmed.startsWith("*************************************************")) {
+            if (trimmed.isEmpty() || trimmed.startsWith("*")) {
                 continue;
             }
 
-            // Handle line continuations (lines that don't start with level numbers)
             if (!trimmed.matches("^\\d{2}\\s+.*")) {
                 if (continuationLine.length() > 0) {
                     continuationLine.append(" ").append(trimmed);
@@ -126,37 +117,25 @@ public class CopybookTokenizer {
                 continue;
             }
 
-            // Process any accumulated continuation line
             if (continuationLine.length() > 0) {
                 Token token = new Token(continuationLine.toString());
-                // Only add non-88-level items
-                if (!token.isConditionName) {
-                    tokens.add(token);
-                }
+                tokens.add(token); // Include ALL tokens (including 88-level)
                 continuationLine = new StringBuilder();
             }
 
-            // Check if line starts with a level number
             if (trimmed.matches("^\\d{2}\\s+.*")) {
                 if (trimmed.endsWith(".")) {
                     Token token = new Token(trimmed);
-                    // Only add non-88-level items
-                    if (!token.isConditionName) {
-                        tokens.add(token);
-                    }
+                    tokens.add(token); // Include ALL tokens
                 } else {
                     continuationLine.append(trimmed);
                 }
             }
         }
 
-        // Process final continuation line if exists
         if (continuationLine.length() > 0) {
             Token token = new Token(continuationLine.toString());
-            // Only add non-88-level items
-            if (!token.isConditionName) {
-                tokens.add(token);
-            }
+            tokens.add(token); // Include ALL tokens
         }
 
         return tokens;
