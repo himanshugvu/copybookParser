@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>com.cobol</groupId>
+  <groupId>org.example</groupId>
   <artifactId>copybookParser</artifactId>
   <name>COBOL Copybook Parser</name>
   <version>1.0.0</version>
@@ -38,7 +38,7 @@
             <configuration>
               <transformers>
                 <transformer>
-                  <mainClass>com.cobol.parser.Main</mainClass>
+                  <mainClass>org.example.Main</mainClass>
                 </transformer>
               </transformers>
             </configuration>
@@ -50,7 +50,7 @@
         <artifactId>exec-maven-plugin</artifactId>
         <version>3.1.0</version>
         <configuration>
-          <mainClass>com.cobol.parser.Main</mainClass>
+          <mainClass>org.example.Main</mainClass>
         </configuration>
       </plugin>
     </plugins>
