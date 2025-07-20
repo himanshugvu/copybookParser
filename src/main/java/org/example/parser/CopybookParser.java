@@ -5,10 +5,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Stack;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class CopybookParser {
 
@@ -41,7 +41,6 @@ public class CopybookParser {
         private int endPosition;
         private int length;
         private List<String> recordTypeValues;
-        private String description;
 
         public RecordLayout(String name) {
             this.name = name;
@@ -67,28 +66,15 @@ public class CopybookParser {
         }
         public List<String> getRecordTypeValues() { return recordTypeValues; }
         public void setRecordTypeValues(List<String> recordTypeValues) { this.recordTypeValues = recordTypeValues; }
-        public String getDescription() { return description; }
-        public void setDescription(String description) { this.description = description; }
     }
 
     private static class PositionTracker {
         private int currentPosition = 1;
-        private Map<String, Integer> redefinesPositions = new HashMap<>();
 
         public int getCurrentPosition() { return currentPosition; }
         public void setPosition(int position) { this.currentPosition = position; }
         public void advancePosition(int length) { this.currentPosition += length; }
-
-        public void saveRedefinesPosition(String fieldName, int position) {
-            redefinesPositions.put(fieldName, position);
-        }
-
-        public void restoreRedefinesPosition(String fieldName) {
-            Integer savedPosition = redefinesPositions.get(fieldName);
-            if (savedPosition != null) {
-                this.currentPosition = savedPosition;
-            }
-        }
+        public void reset() { this.currentPosition = 1; }
     }
 
     public ParseResult parseCopybook(Path copybookPath) throws IOException {
@@ -98,58 +84,166 @@ public class CopybookParser {
         ParseResult result = new ParseResult();
         result.setFileName(copybookPath.getFileName().toString());
 
-        // Process the complete structure
-        processCompleteStructure(tokens, result);
+        // Extract record length from comments
+        int recordLength = extractRecordLengthFromComments(lines);
+        result.setTotalLength(recordLength);
+
+        // Create reference field (just for display)
+        CobolField referenceField = createReferenceField(tokens, recordLength);
+        if (referenceField != null) {
+            result.getFields().add(referenceField);
+        }
+
+        // Process actual record layouts
+        processRecordLayouts(tokens, result, recordLength);
 
         return result;
     }
 
-    private void processCompleteStructure(List<CopybookTokenizer.Token> tokens, ParseResult result) {
-        if (tokens.isEmpty()) return;
+    private int extractRecordLengthFromComments(List<String> lines) {
+        Pattern pattern = Pattern.compile("\\*\\s*REC\\s+LEN\\s*:\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
 
-        // Find the main 01-level record
-        CopybookTokenizer.Token mainRecord = tokens.get(0);
-        if (mainRecord.level != 1) return;
+        for (String line : lines) {
+            Matcher matcher = pattern.matcher(line);
+            if (matcher.find()) {
+                return Integer.parseInt(matcher.group(1));
+            }
+        }
+        return 300; // Default
+    }
 
-        result.setTotalLength(300); // From comment: REC LEN : 300
+    private CobolField createReferenceField(List<CopybookTokenizer.Token> tokens, int recordLength) {
+        // Find the main reference area (01 level without REDEFINES)
+        for (CopybookTokenizer.Token token : tokens) {
+            if (token.level == 1 && token.redefines == null && !token.isConditionName) {
+                CobolField field = new CobolField(token.level, token.name);
+                field.setStartPosition(1);
+                field.setLength(recordLength);
+                field.setEndPosition(recordLength);
+                field.setDataType("GROUP");
+                field.setUsage("Text/ASCII format (1 byte per character)");
 
+                // Add the shared record type field if it exists
+                addSharedFields(tokens, field);
+
+                return field;
+            }
+        }
+        return null;
+    }
+
+    private void addSharedFields(List<CopybookTokenizer.Token> tokens, CobolField parentField) {
         Stack<CobolField> fieldStack = new Stack<>();
         PositionTracker positionTracker = new PositionTracker();
+        fieldStack.push(parentField);
 
-        // Create main record field
-        CobolField mainField = createFieldFromToken(mainRecord);
-        mainField.setStartPosition(1);
-        mainField.setLength(300);
-        mainField.setEndPosition(300);
-        fieldStack.push(mainField);
+        for (CopybookTokenizer.Token token : tokens) {
+            // Stop when we hit REDEFINES or another 01 level
+            if ((token.level == 1 && token.redefines != null) ||
+                    (token.level <= 5 && token.redefines != null)) {
+                break;
+            }
 
-        // Track shared record type field
-        CobolField recordTypeField = null;
-
-        // Process all tokens
-        for (int i = 1; i < tokens.size(); i++) {
-            CopybookTokenizer.Token token = tokens.get(i);
-
-            // Handle 88-level condition names
-            if (token.isConditionName) {
-                if (!fieldStack.isEmpty()) {
-                    CobolField parentField = fieldStack.peek();
-                    parentField.addConditionName(token.name, token.value);
-
-                    // Track record type values
-                    if (isRecordTypeField(parentField.getName())) {
-                        recordTypeField = parentField;
-                    }
+            if (token.level == 1 || token.isConditionName) {
+                if (token.isConditionName && !fieldStack.isEmpty()) {
+                    fieldStack.peek().addConditionName(token.name, token.value);
                 }
                 continue;
             }
 
-            // Handle REDEFINES
+            CobolField field = createFieldFromToken(token);
+
+            // Pop completed fields
+            while (fieldStack.size() > 1 && fieldStack.peek().getLevel() >= field.getLevel()) {
+                CobolField completedField = fieldStack.pop();
+                processCompletedField(completedField, positionTracker);
+                fieldStack.peek().addChild(completedField);
+            }
+
+            field.setStartPosition(positionTracker.getCurrentPosition());
+
+            if (field.getPicture() != null) {
+                int fieldLength = calculateActualFieldLength(field);
+                field.setLength(fieldLength);
+                field.setEndPosition(positionTracker.getCurrentPosition() + fieldLength - 1);
+                positionTracker.advancePosition(fieldLength);
+            }
+
+            fieldStack.push(field);
+        }
+
+        // Process remaining fields
+        while (fieldStack.size() > 1) {
+            CobolField completedField = fieldStack.pop();
+            processCompletedField(completedField, positionTracker);
+            fieldStack.peek().addChild(completedField);
+        }
+    }
+
+    private void processRecordLayouts(List<CopybookTokenizer.Token> tokens, ParseResult result, int recordLength) {
+        // Find record structures that have REDEFINES
+        for (int i = 0; i < tokens.size(); i++) {
+            CopybookTokenizer.Token token = tokens.get(i);
+
+            // Look for 05-level structures (HEADER-RECORD, DETAIL-RECORD, etc.)
+            if (token.level == 5 && !token.isConditionName) {
+                // Check if this is a REDEFINES or a base structure
+                if (token.redefines != null) {
+                    // This is a REDEFINES structure - create a record layout
+                    RecordLayout layout = createRecordLayout(tokens, i, recordLength);
+                    if (layout != null) {
+                        result.getRecordLayouts().add(layout);
+                    }
+                } else {
+                    // This might be a base structure - also create a layout
+                    RecordLayout layout = createRecordLayout(tokens, i, recordLength);
+                    if (layout != null) {
+                        result.getRecordLayouts().add(layout);
+                    }
+                }
+            }
+        }
+    }
+
+    private RecordLayout createRecordLayout(List<CopybookTokenizer.Token> tokens, int startIndex, int recordLength) {
+        CopybookTokenizer.Token firstToken = tokens.get(startIndex);
+
+        // Create layout name based on the structure
+        String layoutName = determineLayoutName(firstToken.name);
+        RecordLayout layout = new RecordLayout(layoutName);
+
+        if (firstToken.redefines != null) {
+            layout.setRedefines(firstToken.redefines);
+        }
+
+        layout.setStartPosition(1);
+        layout.setLength(recordLength);
+
+        // Determine record type values
+        determineRecordTypeValues(firstToken.name, layout);
+
+        Stack<CobolField> fieldStack = new Stack<>();
+        PositionTracker positionTracker = new PositionTracker();
+
+        // Process fields within this structure
+        for (int i = startIndex + 1; i < tokens.size(); i++) {
+            CopybookTokenizer.Token token = tokens.get(i);
+
+            // Stop when we hit another 05-level structure
+            if (token.level == 5 && !token.isConditionName) {
+                break;
+            }
+
+            if (token.isConditionName) {
+                if (!fieldStack.isEmpty()) {
+                    fieldStack.peek().addConditionName(token.name, token.value);
+                }
+                continue;
+            }
+
+            // Handle nested REDEFINES
             if (token.redefines != null) {
-                // Find position of the field being redefined
-                int redefinesPosition = findFieldStartPosition(fieldStack, token.redefines);
-                positionTracker.setPosition(redefinesPosition);
-                positionTracker.saveRedefinesPosition(token.name, redefinesPosition);
+                positionTracker.reset();
             }
 
             CobolField field = createFieldFromToken(token);
@@ -161,6 +255,8 @@ public class CopybookParser {
 
                 if (!fieldStack.isEmpty()) {
                     fieldStack.peek().addChild(completedField);
+                } else {
+                    layout.getFields().add(completedField);
                 }
             }
 
@@ -184,152 +280,38 @@ public class CopybookParser {
             if (!fieldStack.isEmpty()) {
                 fieldStack.peek().addChild(completedField);
             } else {
-                result.getFields().add(completedField);
+                layout.getFields().add(completedField);
             }
         }
-
-        // Create record layouts from the structure
-        createRecordLayouts(result, recordTypeField);
 
         // Handle OCCURS fields
-        for (CobolField field : result.getFields()) {
-            createArrayElementsAndCleanup(field.getChildren());
+        createArrayElementsAndCleanup(layout.getFields());
+
+        return layout;
+    }
+
+    private String determineLayoutName(String structureName) {
+        if (structureName.contains("HEADER")) {
+            return "HEADER-RECORD";
+        } else if (structureName.contains("DETAIL")) {
+            return "DETAIL-RECORD";
+        } else if (structureName.contains("TRAILER") || structureName.contains("TRAIL")) {
+            return "TRAILER-RECORD";
+        }
+        return structureName;
+    }
+
+    private void determineRecordTypeValues(String structureName, RecordLayout layout) {
+        if (structureName.contains("HEADER")) {
+            layout.getRecordTypeValues().add("00");
+        } else if (structureName.contains("DETAIL")) {
+            layout.getRecordTypeValues().add("01");
+        } else if (structureName.contains("TRAILER") || structureName.contains("TRAIL")) {
+            layout.getRecordTypeValues().add("99");
         }
     }
 
-    private void createRecordLayouts(ParseResult result, CobolField recordTypeField) {
-        if (result.getFields().isEmpty()) return;
-
-        CobolField mainRecord = result.getFields().get(0);
-
-        // Find header and detail record structures
-        CobolField headerRecord = null;
-        CobolField detailRecord = null;
-
-        for (CobolField child : mainRecord.getChildren()) {
-            if ("CAONPOST-HEADER-RECORD".equals(child.getName())) {
-                headerRecord = child;
-            } else if ("CAONPOST-DETAIL-RECORD".equals(child.getName())) {
-                detailRecord = child;
-            }
-        }
-
-        // Create header record layout
-        if (headerRecord != null) {
-            RecordLayout headerLayout = new RecordLayout("HEADER-RECORD");
-            headerLayout.setStartPosition(1);
-            headerLayout.setLength(300);
-            headerLayout.setDescription("Header record layout (identified by CAONPOST-RECORD-TYPE = '00')");
-            headerLayout.getRecordTypeValues().add("00");
-
-            // Add shared record type field
-            if (recordTypeField != null) {
-                headerLayout.getFields().add(copyField(recordTypeField));
-            }
-
-            // Add header-specific fields
-            for (CobolField field : headerRecord.getChildren()) {
-                headerLayout.getFields().add(copyField(field));
-            }
-
-            result.getRecordLayouts().add(headerLayout);
-        }
-
-        // Create detail record layout
-        if (detailRecord != null) {
-            RecordLayout detailLayout = new RecordLayout("DETAIL-RECORD");
-            detailLayout.setStartPosition(1);
-            detailLayout.setLength(300);
-            detailLayout.setDescription("Detail record layout (identified by CAONPOST-RECORD-TYPE = '01')");
-            detailLayout.getRecordTypeValues().add("01");
-
-            // Add shared record type field
-            if (recordTypeField != null) {
-                detailLayout.getFields().add(copyField(recordTypeField));
-            }
-
-            // Add detail-specific fields
-            for (CobolField field : detailRecord.getChildren()) {
-                detailLayout.getFields().add(copyField(field));
-            }
-
-            result.getRecordLayouts().add(detailLayout);
-        }
-
-        // Create trailer record layout (placeholder since not fully defined in the sample)
-        RecordLayout trailerLayout = new RecordLayout("TRAILER-RECORD");
-        trailerLayout.setStartPosition(1);
-        trailerLayout.setLength(300);
-        trailerLayout.setDescription("Trailer record layout (identified by CAONPOST-RECORD-TYPE = '99')");
-        trailerLayout.getRecordTypeValues().add("99");
-
-        // Add shared record type field
-        if (recordTypeField != null) {
-            trailerLayout.getFields().add(copyField(recordTypeField));
-        }
-
-        result.getRecordLayouts().add(trailerLayout);
-    }
-
-    private CobolField copyField(CobolField original) {
-        CobolField copy = new CobolField(original.getLevel(), original.getName());
-        copy.setPicture(original.getPicture());
-        copy.setStartPosition(original.getStartPosition());
-        copy.setEndPosition(original.getEndPosition());
-        copy.setLength(original.getLength());
-        copy.setDataType(original.getDataType());
-        copy.setUsage(original.getUsage());
-        copy.setSigned(original.isSigned());
-        copy.setDecimal(original.isDecimal());
-        copy.setDecimalPlaces(original.getDecimalPlaces());
-        copy.setOccursCount(original.getOccursCount());
-        copy.setRedefines(original.getRedefines());
-        copy.setValue(original.getValue());
-
-        // Copy condition names
-        for (CobolField.ConditionName condName : original.getConditionNames()) {
-            copy.addConditionName(condName.getName(), condName.getValue());
-        }
-
-        // Recursively copy children
-        for (CobolField child : original.getChildren()) {
-            copy.addChild(copyField(child));
-        }
-
-        return copy;
-    }
-
-    private boolean isRecordTypeField(String fieldName) {
-        return fieldName != null && (
-                fieldName.contains("RECORD-TYPE") ||
-                        fieldName.equals("CAONPOST-RECORD-TYPE")
-        );
-    }
-
-    private int findFieldStartPosition(Stack<CobolField> fieldStack, String fieldName) {
-        // Search through the field stack to find the named field
-        for (CobolField field : fieldStack) {
-            if (field.getName().equals(fieldName)) {
-                return field.getStartPosition();
-            }
-            int position = searchInChildren(field, fieldName);
-            if (position > 0) return position;
-        }
-        return 1; // Default position
-    }
-
-    private int searchInChildren(CobolField field, String fieldName) {
-        for (CobolField child : field.getChildren()) {
-            if (child.getName().equals(fieldName)) {
-                return child.getStartPosition();
-            }
-            int position = searchInChildren(child, fieldName);
-            if (position > 0) return position;
-        }
-        return 0;
-    }
-
-    // ... (Keep all other existing methods: processCompletedField, calculateActualFieldLength, etc.)
+    // ... (Keep all other helper methods: processCompletedField, calculateActualFieldLength, etc.)
 
     private void processCompletedField(CobolField field, PositionTracker positionTracker) {
         if (field.getPicture() == null && !field.getChildren().isEmpty()) {
