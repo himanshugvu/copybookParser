@@ -36,7 +36,7 @@ public class CopybookParser {
         private String redefines;
         private List<CobolField> fields;
         private int startPosition;
-        private int endPosition; // Added endPosition
+        private int endPosition;
         private int length;
 
         public RecordLayout(String name) {
@@ -52,12 +52,14 @@ public class CopybookParser {
         public void setFields(List<CobolField> fields) { this.fields = fields; }
         public int getStartPosition() { return startPosition; }
         public void setStartPosition(int startPosition) { this.startPosition = startPosition; }
-        public int getEndPosition() { return endPosition; } // Added getter
-        public void setEndPosition(int endPosition) { this.endPosition = endPosition; } // Added setter
+        public int getEndPosition() { return endPosition; }
+        public void setEndPosition(int endPosition) { this.endPosition = endPosition; }
         public int getLength() { return length; }
         public void setLength(int length) {
             this.length = length;
-            this.endPosition = this.startPosition + length - 1; // Auto-calculate endPosition
+            if (this.startPosition > 0) {
+                this.endPosition = this.startPosition + length - 1;
+            }
         }
     }
 
@@ -76,7 +78,7 @@ public class CopybookParser {
         ParseResult result = new ParseResult();
         result.setFileName(copybookPath.getFileName().toString());
 
-        // Find base record first
+        // Find and process base record first
         CobolField baseRecord = null;
 
         int i = 0;
@@ -86,8 +88,21 @@ public class CopybookParser {
             // Process base record (first 01 level without REDEFINES)
             if (token.level == 1 && token.redefines == null && baseRecord == null) {
                 baseRecord = createFieldFromToken(token);
+
+                // Properly set positions for base record
+                baseRecord.setStartPosition(1);
+                int recordLength = baseRecord.getLength();
+                if (recordLength > 0) {
+                    baseRecord.setEndPosition(recordLength);
+                } else {
+                    // If no length specified, default to reasonable size
+                    recordLength = 250; // or extract from PIC clause
+                    baseRecord.setLength(recordLength);
+                    baseRecord.setEndPosition(recordLength);
+                }
+
                 result.getFields().add(baseRecord);
-                result.setTotalLength(baseRecord.getLength());
+                result.setTotalLength(recordLength);
                 i++;
                 continue;
             }
@@ -106,13 +121,44 @@ public class CopybookParser {
         return result;
     }
 
+    // Enhanced createFieldFromToken to handle length calculation better
+    private CobolField createFieldFromToken(CopybookTokenizer.Token token) {
+        CobolField field = new CobolField(token.level, token.name);
+
+        if (token.picture != null) {
+            field.setPicture(token.picture);
+            // The setPicture method should automatically calculate length
+        } else {
+            field.setDataType("GROUP");
+        }
+
+        // Set meaningful usage description
+        String usage = token.usage != null ? token.usage : "DISPLAY";
+        field.setUsage(getMeaningfulUsage(usage));
+
+        if (token.occurs > 0) {
+            field.setOccursCount(token.occurs);
+        }
+
+        if (token.redefines != null) {
+            field.setRedefines(token.redefines);
+        }
+
+        if (token.value != null) {
+            field.setValue(token.value);
+        }
+
+        return field;
+    }
+
+    // ... (Keep all other existing methods: processRedefinesLayout, extractLayoutTokens, etc.)
+
     private List<CopybookTokenizer.Token> extractLayoutTokens(List<CopybookTokenizer.Token> allTokens, int startIndex) {
         List<CopybookTokenizer.Token> layoutTokens = new ArrayList<>();
 
         for (int i = startIndex; i < allTokens.size(); i++) {
             CopybookTokenizer.Token token = allTokens.get(i);
 
-            // Stop if we hit another 01 level record
             if (token.level == 1 && i > startIndex) {
                 break;
             }
@@ -129,17 +175,15 @@ public class CopybookParser {
         CopybookTokenizer.Token firstToken = tokens.get(0);
         RecordLayout layout = new RecordLayout(firstToken.name);
         layout.setRedefines(firstToken.redefines);
-        layout.setStartPosition(1); // REDEFINES always starts at position 1
+        layout.setStartPosition(1);
 
         Stack<CobolField> fieldStack = new Stack<>();
         PositionTracker positionTracker = new PositionTracker();
         positionTracker.setPosition(1);
 
-        // Process child fields directly (skip the 01-level wrapper)
         for (int i = 1; i < tokens.size(); i++) {
             CopybookTokenizer.Token token = tokens.get(i);
 
-            // Handle 88-level condition names
             if (token.isConditionName) {
                 if (!fieldStack.isEmpty()) {
                     CobolField parentField = fieldStack.peek();
@@ -150,7 +194,6 @@ public class CopybookParser {
 
             CobolField field = createFieldFromToken(token);
 
-            // Pop completed fields from stack
             while (!fieldStack.isEmpty() && fieldStack.peek().getLevel() >= field.getLevel()) {
                 CobolField completedField = fieldStack.pop();
                 processCompletedField(completedField, positionTracker);
@@ -158,7 +201,7 @@ public class CopybookParser {
                 if (!fieldStack.isEmpty()) {
                     fieldStack.peek().addChild(completedField);
                 } else {
-                    layout.getFields().add(completedField); // Add directly to layout
+                    layout.getFields().add(completedField);
                 }
             }
 
@@ -174,7 +217,6 @@ public class CopybookParser {
             fieldStack.push(field);
         }
 
-        // Process remaining fields in stack
         while (!fieldStack.isEmpty()) {
             CobolField completedField = fieldStack.pop();
             processCompletedField(completedField, positionTracker);
@@ -182,14 +224,12 @@ public class CopybookParser {
             if (!fieldStack.isEmpty()) {
                 fieldStack.peek().addChild(completedField);
             } else {
-                layout.getFields().add(completedField); // Add directly to layout
+                layout.getFields().add(completedField);
             }
         }
 
-        // Create array elements and cleanup
         createArrayElementsAndCleanup(layout.getFields());
 
-        // Set layout length and endPosition
         layout.setLength(positionTracker.getCurrentPosition() - 1);
         result.getRecordLayouts().add(layout);
     }
@@ -258,7 +298,7 @@ public class CopybookParser {
                         fieldLength,
                         child.getPicture(),
                         child.getDataType(),
-                        getMeaningfulUsage(child.getUsage()) // Enhanced usage description
+                        getMeaningfulUsage(child.getUsage())
                 );
                 arrayElement.getFields().add(fieldPosition);
                 currentPos += fieldLength;
@@ -320,7 +360,6 @@ public class CopybookParser {
         return totalDigits;
     }
 
-    // Enhanced usage descriptions with meaningful values
     private String getMeaningfulUsage(String usage) {
         if (usage == null) usage = "DISPLAY";
 
@@ -338,34 +377,6 @@ public class CopybookParser {
             case "POINTER" -> "Pointer data item (4 bytes)";
             default -> usage + " (custom format)";
         };
-    }
-
-    private CobolField createFieldFromToken(CopybookTokenizer.Token token) {
-        CobolField field = new CobolField(token.level, token.name);
-
-        if (token.picture != null) {
-            field.setPicture(token.picture);
-        } else {
-            field.setDataType("GROUP");
-        }
-
-        // Set meaningful usage description
-        String usage = token.usage != null ? token.usage : "DISPLAY";
-        field.setUsage(getMeaningfulUsage(usage));
-
-        if (token.occurs > 0) {
-            field.setOccursCount(token.occurs);
-        }
-
-        if (token.redefines != null) {
-            field.setRedefines(token.redefines);
-        }
-
-        if (token.value != null) {
-            field.setValue(token.value);
-        }
-
-        return field;
     }
 
     public String toJson(ParseResult parseResult) throws IOException {
