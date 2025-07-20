@@ -27,7 +27,7 @@ public class CobolField {
 
     @JsonProperty("dataType")
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    private String dataType; // Now: "STRING", "NUMBER", or "GROUP"
+    private String dataType;
 
     @JsonProperty("usage")
     private String usage;
@@ -80,7 +80,6 @@ public class CobolField {
         this.name = name;
     }
 
-    // ArrayElement and FieldPosition classes remain the same...
     public static class ArrayElement {
         @JsonProperty("index")
         private int index;
@@ -105,7 +104,6 @@ public class CobolField {
             this.fields = new ArrayList<>();
         }
 
-        // Getters and setters...
         public int getIndex() { return index; }
         public void setIndex(int index) { this.index = index; }
         public int getStartPosition() { return startPosition; }
@@ -152,7 +150,6 @@ public class CobolField {
             this.usage = usage;
         }
 
-        // Getters and setters...
         public String getName() { return name; }
         public void setName(String name) { this.name = name; }
         public int getStartPosition() { return startPosition; }
@@ -185,7 +182,7 @@ public class CobolField {
         public String getValue() { return value; }
     }
 
-    // All getters and setters...
+    // All getters and setters
     public int getLevel() { return level; }
     public void setLevel(int level) { this.level = level; }
 
@@ -258,19 +255,15 @@ public class CobolField {
 
     private void analyzePicture() {
         if (picture == null) {
-            this.dataType = "GROUP"; // No picture = group field
+            this.dataType = "GROUP";
             return;
         }
 
         String pic = picture.toUpperCase().trim();
 
-        // Check if signed
         this.signed = pic.startsWith("S") || pic.contains("S");
-
-        // Check if decimal
         this.decimal = pic.contains("V");
 
-        // Calculate decimal places
         if (decimal) {
             String[] parts = pic.split("V");
             if (parts.length > 1) {
@@ -279,16 +272,14 @@ public class CobolField {
             }
         }
 
-        // Simplified data type determination
         if (pic.contains("9")) {
             this.dataType = "NUMBER";
         } else if (pic.contains("X") || pic.contains("A")) {
             this.dataType = "STRING";
         } else {
-            this.dataType = "STRING"; // Default to string for unknown formats
+            this.dataType = "STRING";
         }
 
-        // Calculate length
         this.length = calculatePictureLength(pic);
     }
 

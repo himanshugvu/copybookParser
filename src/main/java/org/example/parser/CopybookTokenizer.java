@@ -56,7 +56,6 @@ public class CopybookTokenizer {
                 parseRedefines(line);
             }
 
-            // Always parse VALUE (especially important for 88-level)
             parseValue(line);
         }
 
@@ -119,14 +118,14 @@ public class CopybookTokenizer {
 
             if (continuationLine.length() > 0) {
                 Token token = new Token(continuationLine.toString());
-                tokens.add(token); // Include ALL tokens (including 88-level)
+                tokens.add(token);
                 continuationLine = new StringBuilder();
             }
 
             if (trimmed.matches("^\\d{2}\\s+.*")) {
                 if (trimmed.endsWith(".")) {
                     Token token = new Token(trimmed);
-                    tokens.add(token); // Include ALL tokens
+                    tokens.add(token);
                 } else {
                     continuationLine.append(trimmed);
                 }
@@ -135,7 +134,7 @@ public class CopybookTokenizer {
 
         if (continuationLine.length() > 0) {
             Token token = new Token(continuationLine.toString());
-            tokens.add(token); // Include ALL tokens
+            tokens.add(token);
         }
 
         return tokens;
